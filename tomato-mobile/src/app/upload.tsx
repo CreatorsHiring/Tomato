@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, Image, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
+import { Sparkles } from 'lucide-react-native';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SecondaryButton } from '../components/SecondaryButton';
 import { MedicineInput } from '../components/MedicineInput';
 import { UploadCard } from '../components/UploadCard';
 import { useScanContext } from '../context/ScanContext';
+import { analyzeMedicineImage } from '../services/api';
 import { TomatoTheme } from '../constants/theme';
 
 export default function UploadScreen() {
@@ -14,8 +16,9 @@ export default function UploadScreen() {
   const { setMedicineInfo } = useScanContext();
 
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [medicineName, setMedicineName] = useState('Paracetamol');
-  const [dosage, setDosage] = useState('500 mg');
+  const [medicineName, setMedicineName] = useState('');
+  const [dosage, setDosage] = useState('');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [errors, setErrors] = useState<{ medicine?: string; dosage?: string }>({});
 
   const pickImage = async () => {
@@ -33,7 +36,22 @@ export default function UploadScreen() {
     });
 
     if (!result.canceled && result.assets && result.assets.length > 0) {
-      setSelectedImage(result.assets[0].uri);
+      const uri = result.assets[0].uri;
+      setSelectedImage(uri);
+      
+      // Perform Gemini Vision / OCR Analysis
+      setIsAnalyzing(true);
+      try {
+        const ocrData = await analyzeMedicineImage(uri);
+        if (ocrData && ocrData.medicine_name) {
+          setMedicineName(ocrData.medicine_name);
+          setDosage(ocrData.dosage);
+        }
+      } catch (e) {
+        console.warn('OCR error:', e);
+      } finally {
+        setIsAnalyzing(false);
+      }
     }
   };
 
@@ -76,10 +94,19 @@ export default function UploadScreen() {
 
       {/* Confirmation & manual review inputs */}
       <View style={styles.formCard}>
-        <Text style={styles.formTitle}>Confirm Medicine Information</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.formTitle}>Confirm Medicine Information</Text>
+          {isAnalyzing && (
+            <View style={styles.aiBadge}>
+              <Sparkles size={14} color={TomatoTheme.colors.primary} />
+              <Text style={styles.aiText}>AI Analyzing...</Text>
+            </View>
+          )}
+        </View>
 
         <MedicineInput
-          label="Medicine"
+          label="Medicine (Active Ingredient)"
+          placeholder="e.g. Paracetamol"
           value={medicineName}
           onChangeText={(text) => {
             setMedicineName(text);
@@ -90,6 +117,7 @@ export default function UploadScreen() {
 
         <MedicineInput
           label="Dosage"
+          placeholder="e.g. 500 mg"
           value={dosage}
           onChangeText={(text) => {
             setDosage(text);
@@ -102,6 +130,8 @@ export default function UploadScreen() {
       <PrimaryButton
         title="Continue"
         onPress={handleContinue}
+        loading={isAnalyzing}
+        disabled={!medicineName.trim() || !dosage.trim()}
         style={styles.continueBtn}
       />
     </ScrollView>
@@ -145,11 +175,30 @@ const styles = StyleSheet.create({
     marginBottom: TomatoTheme.spacing.lg,
     ...TomatoTheme.shadows.soft,
   },
+  titleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: TomatoTheme.spacing.md,
+  },
   formTitle: {
     fontSize: 16,
     fontWeight: '700',
     color: TomatoTheme.colors.textPrimary,
-    marginBottom: TomatoTheme.spacing.md,
+  },
+  aiBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: TomatoTheme.colors.primaryLight,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: TomatoTheme.borderRadius.sm,
+  },
+  aiText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: TomatoTheme.colors.primary,
   },
   continueBtn: {
     marginTop: TomatoTheme.spacing.xs,

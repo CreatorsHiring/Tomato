@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { Camera as CameraIcon, RefreshCw } from 'lucide-react-native';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { ImageResult } from 'expo-image-manipulator';
+import { Camera as CameraIcon, RefreshCw, Crop as CropIcon, Sparkles, ArrowRight } from 'lucide-react-native';
 import { PrimaryButton } from '../components/PrimaryButton';
+import { SecondaryButton } from '../components/SecondaryButton';
 import { MedicineInput } from '../components/MedicineInput';
 import { useScanContext } from '../context/ScanContext';
+import { analyzeMedicineImage } from '../services/api';
 import { TomatoTheme } from '../constants/theme';
 
 export default function CameraScreen() {
@@ -13,9 +17,26 @@ export default function CameraScreen() {
   const { setMedicineInfo } = useScanContext();
 
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [medicineName, setMedicineName] = useState('Paracetamol');
-  const [dosage, setDosage] = useState('500 mg');
+  const [medicineName, setMedicineName] = useState('');
+  const [dosage, setDosage] = useState('');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isCropping, setIsCropping] = useState(false);
   const [errors, setErrors] = useState<{ medicine?: string; dosage?: string }>({});
+
+  const processOcrOnImage = async (uri: string) => {
+    setIsAnalyzing(true);
+    try {
+      const ocrData = await analyzeMedicineImage(uri);
+      if (ocrData && ocrData.medicine_name) {
+        setMedicineName(ocrData.medicine_name);
+        setDosage(ocrData.dosage);
+      }
+    } catch (e) {
+      console.warn('OCR error:', e);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
   const handleCapture = async () => {
     const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
@@ -26,12 +47,62 @@ export default function CameraScreen() {
     }
 
     const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: true,
+      allowsEditing: true, // Native picker crop interface
+      aspect: [4, 3],
       quality: 0.8,
     });
 
     if (!result.canceled && result.assets && result.assets.length > 0) {
-      setCapturedImage(result.assets[0].uri);
+      const uri = result.assets[0].uri;
+      setCapturedImage(uri);
+      await processOcrOnImage(uri);
+    }
+  };
+
+  const handleCropImage = async () => {
+    if (!capturedImage) return;
+
+    setIsCropping(true);
+    try {
+      // Load image metadata to compute a proper centered crop
+      const imgInfo: ImageResult = await ImageManipulator.manipulateAsync(
+        capturedImage,
+        [], // no transforms — just resolve metadata / current dimensions
+        { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      const { width: imgW, height: imgH } = imgInfo;
+
+      // Compute a centered 4:3 crop covering 80% of the shorter dimension
+      const targetAspect = 4 / 3;
+      let cropW: number;
+      let cropH: number;
+
+      if (imgW / imgH > targetAspect) {
+        // Image is wider than 4:3 → constrain by height
+        cropH = Math.floor(imgH * 0.8);
+        cropW = Math.floor(cropH * targetAspect);
+      } else {
+        // Image is taller than 4:3 → constrain by width
+        cropW = Math.floor(imgW * 0.8);
+        cropH = Math.floor(cropW / targetAspect);
+      }
+
+      const originX = Math.floor((imgW - cropW) / 2);
+      const originY = Math.floor((imgH - cropH) / 2);
+
+      const manipResult: ImageResult = await ImageManipulator.manipulateAsync(
+        capturedImage,
+        [{ crop: { originX, originY, width: cropW, height: cropH } }],
+        { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      setCapturedImage(manipResult.uri);
+      await processOcrOnImage(manipResult.uri);
+    } catch (e) {
+      console.warn('Crop error:', e);
+    } finally {
+      setIsCropping(false);
     }
   };
 
@@ -45,7 +116,7 @@ export default function CameraScreen() {
     }
 
     setMedicineInfo(medicineName, dosage, capturedImage);
-    router.push('/confirm');
+    router.push('/insert');
   };
 
   return (
@@ -53,10 +124,10 @@ export default function CameraScreen() {
       {!capturedImage ? (
         <View style={styles.viewfinderContainer}>
           <Text style={styles.instructionText}>
-            Position the medicine name and dosage inside the frame.
+            Position the medicine strip clearly inside the frame.
           </Text>
 
-          {/* Viewfinder Mock Frame */}
+          {/* Viewfinder Frame */}
           <View style={styles.cameraPreview}>
             <View style={styles.scanFrame}>
               <View style={[styles.corner, styles.topLeft]} />
@@ -77,21 +148,45 @@ export default function CameraScreen() {
         </View>
       ) : (
         <View style={styles.reviewContainer}>
-          <Text style={styles.instructionText}>Captured Strip Photo:</Text>
+          <Text style={styles.instructionText}>Captured & Cropped Medicine Strip:</Text>
 
           <View style={styles.previewBox}>
             <Image source={{ uri: capturedImage }} style={styles.capturedImage} />
-            <TouchableOpacity style={styles.retakeBadge} onPress={handleCapture}>
-              <RefreshCw size={16} color="#FFFFFF" />
-              <Text style={styles.retakeText}>Retake</Text>
-            </TouchableOpacity>
+            
+            {/* Quick Action Badges */}
+            <View style={styles.badgeRow}>
+              <TouchableOpacity style={styles.actionBadge} onPress={handleCropImage} disabled={isCropping}>
+                {isCropping ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <CropIcon size={16} color="#FFFFFF" />
+                    <Text style={styles.badgeText}>Crop Photo</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.actionBadge} onPress={handleCapture}>
+                <RefreshCw size={16} color="#FFFFFF" />
+                <Text style={styles.badgeText}>Retake</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           <View style={styles.formCard}>
-            <Text style={styles.formTitle}>Confirm Medicine Details</Text>
+            <View style={styles.titleRow}>
+              <Text style={styles.formTitle}>Identified Medicine Details</Text>
+              {isAnalyzing && (
+                <View style={styles.aiBadge}>
+                  <Sparkles size={14} color={TomatoTheme.colors.primary} />
+                  <Text style={styles.aiText}>AI Analyzing...</Text>
+                </View>
+              )}
+            </View>
 
             <MedicineInput
-              label="Medicine"
+              label="Medicine (Active Ingredient)"
+              placeholder="e.g. Paracetamol"
               value={medicineName}
               onChangeText={(text) => {
                 setMedicineName(text);
@@ -102,6 +197,7 @@ export default function CameraScreen() {
 
             <MedicineInput
               label="Dosage"
+              placeholder="e.g. 500 mg"
               value={dosage}
               onChangeText={(text) => {
                 setDosage(text);
@@ -111,7 +207,23 @@ export default function CameraScreen() {
             />
           </View>
 
-          <PrimaryButton title="Continue" onPress={handleContinue} />
+          {/* Action Row */}
+          <View style={styles.actionRow}>
+            <SecondaryButton
+              title="Crop Photo"
+              onPress={handleCropImage}
+              icon={<CropIcon size={18} color={TomatoTheme.colors.textPrimary} />}
+              style={styles.cropBtn}
+            />
+            <PrimaryButton
+              title="Proceed"
+              onPress={handleContinue}
+              loading={isAnalyzing}
+              disabled={!medicineName.trim() || !dosage.trim()}
+              icon={<ArrowRight size={18} color="#FFFFFF" />}
+              style={styles.proceedBtn}
+            />
+          </View>
         </View>
       )}
     </ScrollView>
@@ -184,11 +296,15 @@ const styles = StyleSheet.create({
     height: 220,
     borderRadius: TomatoTheme.borderRadius.xl,
   },
-  retakeBadge: {
+  badgeRow: {
     position: 'absolute',
     bottom: 12,
     right: 12,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  actionBadge: {
+    backgroundColor: 'rgba(0,0,0,0.75)',
     paddingVertical: 6,
     paddingHorizontal: 12,
     borderRadius: TomatoTheme.borderRadius.full,
@@ -196,7 +312,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  retakeText: {
+  badgeText: {
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '600',
@@ -210,10 +326,39 @@ const styles = StyleSheet.create({
     marginBottom: TomatoTheme.spacing.lg,
     ...TomatoTheme.shadows.soft,
   },
+  titleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: TomatoTheme.spacing.md,
+  },
   formTitle: {
     fontSize: 16,
     fontWeight: '700',
     color: TomatoTheme.colors.textPrimary,
-    marginBottom: TomatoTheme.spacing.md,
+  },
+  aiBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: TomatoTheme.colors.primaryLight,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: TomatoTheme.borderRadius.sm,
+  },
+  aiText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: TomatoTheme.colors.primary,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  cropBtn: {
+    flex: 1,
+  },
+  proceedBtn: {
+    flex: 1.2,
   },
 });

@@ -29,29 +29,50 @@ export default function ScanScreen() {
   };
 
   useEffect(() => {
-    let timer: any;
+    let isMounted = true;
 
     if (currentStepIndex < WAVELENGTHS.length) {
-      // Step through each wavelength every 900ms
-      timer = setTimeout(() => {
-        const finishedWl = WAVELENGTHS[currentStepIndex];
-        setCompletedSteps((prev) => [...prev, finishedWl]);
-        setCurrentStepIndex((prev) => prev + 1);
-      }, 900);
+      // Step through each wavelength every 800ms
+      const timer = setTimeout(() => {
+        if (isMounted) {
+          const finishedWl = WAVELENGTHS[currentStepIndex];
+          setCompletedSteps((prev) => [...prev, finishedWl]);
+          setCurrentStepIndex((prev) => prev + 1);
+        }
+      }, 800);
+
+      return () => {
+        isMounted = false;
+        clearTimeout(timer);
+      };
     } else if (currentStepIndex === WAVELENGTHS.length && !analyzing) {
-      // All 6 wavelengths complete -> start optical classifier analysis
+      // All 6 wavelengths complete -> trigger classification analysis
       setAnalyzing(true);
-      timer = setTimeout(async () => {
-        const classification = await analyzeScan({
-          medicine: scanState.medicineName,
-          measurements: measurements,
-        });
-        setScanResult(classification);
-        router.replace('/result');
-      }, 1200);
+
+      const performClassification = async () => {
+        try {
+          const classification = await analyzeScan({
+            medicine: scanState.medicineName,
+            measurements: measurements,
+          });
+          if (isMounted) {
+            setScanResult(classification);
+          }
+        } catch (e) {
+          console.error('Classification error during scan:', e);
+        } finally {
+          if (isMounted) {
+            router.replace('/result');
+          }
+        }
+      };
+
+      performClassification();
     }
 
-    return () => clearTimeout(timer);
+    return () => {
+      isMounted = false;
+    };
   }, [currentStepIndex, analyzing]);
 
   const activeWavelength = currentStepIndex < WAVELENGTHS.length ? WAVELENGTHS[currentStepIndex] : null;
@@ -65,13 +86,13 @@ export default function ScanScreen() {
       <ScanProgress
         currentStep={Math.min(currentStepIndex + 1, 6)}
         totalSteps={6}
-        statusText={analyzing ? 'Analyzing sample...' : 'Building optical fingerprint...'}
+        statusText={analyzing ? 'Analyzing sample with SVM model...' : 'Building optical fingerprint...'}
       />
 
       {/* Sequential Wavelength Measurements Display */}
       <View style={styles.barsCard}>
         <Text style={styles.sectionHeader}>Optical Wavelength Signals</Text>
-        {WAVELENGTHS.map((wl, idx) => {
+        {WAVELENGTHS.map((wl) => {
           const isDone = completedSteps.includes(wl);
           const isActive = activeWavelength === wl;
           const val = (measurements as any)[wl] || 0;

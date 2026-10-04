@@ -29,12 +29,13 @@ export default function ResultScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-      {/* Result Visual Card */}
+      {/* Result Visual Card with SVM Model Output */}
       <ResultCard
         result={resultData.result}
         medicineName={scanState.medicineName}
         dosage={scanState.dosage}
         confidence={resultData.confidence}
+        probabilities={resultData.probabilities}
         measurements={scanState.sensorMeasurements}
       />
 

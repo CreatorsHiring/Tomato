@@ -29,7 +29,7 @@ export default function InsertScreen() {
   const handlePickDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/json',
+        type: ['application/json', '*/*'],
         copyToCacheDirectory: true,
       });
 
@@ -37,7 +37,6 @@ export default function InsertScreen() {
         const file = result.assets[0];
         setSelectedFileName(file.name);
 
-        // Fetch local file text (works cross-platform in Expo)
         const res = await fetch(file.uri);
         const jsonText = await res.text();
         const parsed = JSON.parse(jsonText);
@@ -47,13 +46,11 @@ export default function InsertScreen() {
         } else {
           Alert.alert('Invalid Sensor JSON', 'Uploaded file must contain all 6 wavelength measurements.');
           setSelectedFileName(null);
+          setMeasurements(null);
         }
       }
     } catch (e) {
-      // If user cancels or picker fails, allow loading sample demo JSON
-      Alert.alert('File Picker', 'Using default demo JSON data for scan analysis.');
-      setSelectedFileName('simulated_scan_paracetamol.json');
-      setMeasurements(MOCK_DEFAULT_JSON);
+      Alert.alert('JSON Upload', 'Could not read selected file. You can load demo measurements below.');
     }
   };
 
@@ -73,8 +70,11 @@ export default function InsertScreen() {
   };
 
   const handleStartAnalysis = () => {
-    const finalMeasurements = measurements || MOCK_DEFAULT_JSON;
-    setSensorMeasurements(finalMeasurements);
+    if (!measurements) {
+      Alert.alert('Scan Data Required', 'Please upload a sensor JSON file or tap to load demo measurements before starting analysis.');
+      return;
+    }
+    setSensorMeasurements(measurements);
     router.push('/scan');
   };
 
@@ -111,13 +111,11 @@ export default function InsertScreen() {
             style={styles.uploadCard}
           />
 
-          {!measurements && (
+          {!measurements ? (
             <Text style={styles.demoHintLink} onPress={handleUseDemoJson}>
               Or tap here to load Demo Paracetamol JSON ✓
             </Text>
-          )}
-
-          {measurements && (
+          ) : (
             <View style={styles.successBadge}>
               <Text style={styles.successText}>Sensor data loaded ✓</Text>
             </View>
@@ -126,6 +124,7 @@ export default function InsertScreen() {
           <PrimaryButton
             title="Start Analysis"
             onPress={handleStartAnalysis}
+            disabled={!measurements}
             style={styles.actionBtn}
           />
         </View>
